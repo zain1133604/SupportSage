@@ -196,6 +196,6 @@ class AscendedRAGPipeline:
                             torch.cuda.empty_cache()
 
                     except Exception as e:
-                        logger.error(f"❌ Hard Failure on {file}: {str(e)}")
+                        logger.error(f"Hard Failure on {file}: {str(e)}")
                 
             return final_parents, final_children

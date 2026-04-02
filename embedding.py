@@ -43,7 +43,7 @@ class EmbeddingEngine:
                 return []
 
             import time 
-            logger.info(f"🛡️ SAFE-MODE: Using 'Pulse-Embedding' to prevent PSU spikes.")
+            logger.info(f"SAFE-MODE: Using 'Pulse-Embedding' to prevent PSU spikes.")
             records = []
             
             # Disable gradients to save VRAM atemps low
@@ -78,14 +78,14 @@ class EmbeddingEngine:
                         logger.error(f"Inference failed: {e}")
                         continue 
 
-            logger.info(f"✅ Pulse-Encoding complete. PC survived.")
+            logger.info(f"Pulse-Encoding complete. PC survived.")
             return records
         
     def split_parent_child(self, parents: List[Document], children: List[Document]) -> Dict[str, List[Dict[str, Any]]]:
         """
         Wrapper to process both parents and children through the pulse-encoder.
         """
-        logger.info("🚀 Starting Dual-Stage Embedding (Parents & Children)")
+        logger.info("Starting Dual-Stage Embedding (Parents & Children)")
         
         # 1. Embed Parents
         logger.info("--- Processing Parent Documents ---")
