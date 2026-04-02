@@ -46,7 +46,7 @@ class EmbeddingEngine:
             logger.info(f"🛡️ SAFE-MODE: Using 'Pulse-Embedding' to prevent PSU spikes.")
             records = []
             
-            # Disable gradients to save VRAM and keep temps low
+            # Disable gradients to save VRAM atemps low
             with torch.no_grad():
                 for doc in tqdm(docs, desc="Pulse-Encoding", disable=not show_progress):
                     try:
