@@ -128,74 +128,91 @@ class AscendedRAGPipeline:
 
         # ... (rest of your cosine similarity logic)
     def process(self):
-            loaders = {".md": TextLoader, ".pdf": PyPDFLoader, ".py": PythonLoader, ".txt": TextLoader}
-            final_parents, final_children = [], []
-            child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+        loaders = {
+            ".md": TextLoader, 
+            ".pdf": PyPDFLoader, 
+            ".py": PythonLoader, 
+            ".txt": TextLoader,
+            ".csv": TextLoader  # Add this!
+        }
+        final_parents, final_children = [], []
+        child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
 
-            for root, _, files in os.walk(self.base_path):
-                company = os.path.basename(root)
-                for file in tqdm(files, desc=f"Ingesting {company}"):
-                    ext = os.path.splitext(file)[1].lower()
-                    if ext not in loaders: continue
-                    path = os.path.join(root, file)
-                    
-                    try:
-                        # 1. READ FILE MANUALLY (Windows-Safe)
-                        # We use 'rb' for hashing and then 'r' with utf-8 ignore for loading
-                        with open(path, 'rb') as f:
-                            file_data = f.read()
-                            file_hash = hashlib.md5(file_data).hexdigest()
-                        
-                        if file_hash in self.seen_file_hashes: 
-                            continue
-                        self.seen_file_hashes.add(file_hash)
-
-                        # 2. CONVERT TO TEXT (Prevents the "Error loading" crashes)
-                        try:
-                            content = file_data.decode('utf-8', errors='ignore')
-                        except Exception:
-                            logger.error(f"Could not decode {file}")
-                            continue
-
-                        # 3. MANUAL DOCUMENT CREATION
-                        # This replaces: raw_docs = loaders[ext](path).load()
-                        # We skip the heavy LangChain loaders which are crashing your PC
-                        raw_docs = [Document(page_content=content, metadata={"source": company, "file": file})]
-
-                        for doc in raw_docs:
-                            # This calls your custom_semantic_split which handles the 50k crop
-                            semantic_parents = self.custom_semantic_split(doc.page_content)
-                            
-                            for group_text in semantic_parents:
-                                if not self._is_high_quality(group_text):
-                                    self.stats["filtered"] += 1
-                                    continue
-                                
-                                parent_id = f"p-{uuid.uuid4().hex[:8]}"
-                                final_parents.append(Document(
-                                    page_content=group_text, 
-                                    metadata={"id": parent_id, "source": company, "file": file}
-                                ))
-
-                                children_texts = child_splitter.split_text(group_text)
-                                for j, c_text in enumerate(children_texts):
-                                    final_children.append(Document(
-                                        page_content=c_text, 
-                                        metadata={"parent_ref": parent_id, "source": company}
-                                    ))
-                        
-                        self.stats["files"] += 1
-
-                        # --- THE SAFETY BRAKES ---
-                        del file_data
-                        del content
-                        del raw_docs 
-                        gc.collect() 
-                        time.sleep(0.1)
-                        if self.device == "cuda":
-                            torch.cuda.empty_cache()
-
-                    except Exception as e:
-                        logger.error(f"Hard Failure on {file}: {str(e)}")
+        for root, _, files in os.walk(self.base_path):
+            company = os.path.basename(root)
+            for file in tqdm(files, desc=f"Ingesting {company}"):
+                ext = os.path.splitext(file)[1].lower()
+                if ext not in loaders: continue
+                path = os.path.join(root, file)
                 
-            return final_parents, final_children
+                try:
+                    with open(path, 'rb') as f:
+                        file_data = f.read()
+                        file_hash = hashlib.md5(file_data).hexdigest()
+                    
+                    if file_hash in self.seen_file_hashes: 
+                        continue
+                    self.seen_file_hashes.add(file_hash)
+
+                    content = file_data.decode('utf-8', errors='ignore')
+
+                    # 2. SPECIAL LOGIC FOR CSV
+                    if ext == ".csv":
+                        # We add a header hint so the AI knows what the columns are
+                        content = f"CSV Data from {file}:\n" + content
+
+                    raw_docs = [Document(page_content=content, metadata={"source": company, "file": file})]
+
+                    for doc in raw_docs:
+                        semantic_parents = self.custom_semantic_split(doc.page_content)
+                        
+                        for group_text in semantic_parents:
+                            # 3. LOOSEN QUALITY GATE FOR CODE AND CSV
+                            # If it's a .py or .csv file, we allow shorter text (50 chars instead of 150)
+                            min_len = 50 if ext in [".py", ".csv"] else 150
+                            
+                            if len(group_text.strip()) < min_len:
+                                self.stats["filtered"] += 1
+                                continue
+                    # 3. MANUAL DOCUMENT CREATION
+                    # This replaces: raw_docs = loaders[ext](path).load()
+                    # We skip the heavy LangChain loaders which are crashing your PC
+                    raw_docs = [Document(page_content=content, metadata={"source": company, "file": file})]
+
+                    for doc in raw_docs:
+                        # This calls your custom_semantic_split which handles the 50k crop
+                        semantic_parents = self.custom_semantic_split(doc.page_content)
+                        
+                        for group_text in semantic_parents:
+                            if not self._is_high_quality(group_text):
+                                self.stats["filtered"] += 1
+                                continue
+                            
+                            parent_id = f"p-{uuid.uuid4().hex[:8]}"
+                            final_parents.append(Document(
+                                page_content=group_text, 
+                                metadata={"id": parent_id, "source": company, "file": file}
+                            ))
+
+                            children_texts = child_splitter.split_text(group_text)
+                            for j, c_text in enumerate(children_texts):
+                                final_children.append(Document(
+                                    page_content=c_text, 
+                                    metadata={"parent_ref": parent_id, "source": company}
+                                ))
+                    
+                    self.stats["files"] += 1
+
+                    # --- THE SAFETY BRAKES ---
+                    del file_data
+                    del content
+                    del raw_docs 
+                    gc.collect() 
+                    time.sleep(0.1)
+                    if self.device == "cuda":
+                        torch.cuda.empty_cache()
+
+                except Exception as e:
+                    logger.error(f"Hard Failure on {file}: {str(e)}")
+            
+        return final_parents, final_children
