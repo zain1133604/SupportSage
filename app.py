@@ -26,12 +26,30 @@ def process_upload(user_id, password, files):
                 return "❌ User exists but Password incorrect."
 
         temp_dir = f"./temp_{user_id}"
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)
-        for f in files:
-            shutil.copy(f.name, os.path.join(temp_dir, os.path.basename(f.name)))
+
+        # --- FIX: Handle List of Files or Single Folder ---
+        if isinstance(files, list):
+            # If it's a list of files (like in your screenshot)
+            for f in files:
+                # Gradio file objects have a .name attribute which is the temp path
+                dest_path = os.path.join(temp_dir, os.path.basename(f.name))
+                shutil.copy(f.name, dest_path)
+        else:
+            # If it's a single directory path
+            shutil.copytree(files, temp_dir, dirs_exist_ok=True)
+
+        logger.info(f"📂 Data prepared in {temp_dir}. Starting RAG Pipeline...")
 
         pipeline = AscendedRAGPipeline(base_path=temp_dir)
         parents, children = pipeline.process()
+        
+        if not parents:
+            return "⚠️ No valid text/pdf/code files found in the upload."
+
+        # Use global embedder logic if you implemented it, otherwise:
         embedder = EmbeddingEngine(model_name="BAAI/bge-m3", batch_size=4) 
         embedded_data = embedder.split_parent_child(parents, children)
         db_manager.insert_user_data(user_id, embedded_data)
@@ -39,7 +57,8 @@ def process_upload(user_id, password, files):
         shutil.rmtree(temp_dir)
         return f"✅ Database for '{user_id}' ready! Go to the Chat tab."
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        logger.error(f"Ingestion Error: {str(e)}")
+        return f"❌ Ingestion Error: {str(e)}"
     
 def handle_deletion(user_id, password):
     if not user_id or not password:
@@ -95,7 +114,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
                 with gr.Column(scale=1):
                     u_id = gr.Textbox(label="User ID", placeholder="e.g., zain_ali")
                     u_pw = gr.Textbox(label="Password", type="password")
-                    file_output = gr.File(label="Upload Documents", file_count="multiple")
+                    file_output = gr.File(label="Upload Documents", file_count="directory")
                     upload_btn = gr.Button("🚀 Build Vector Intelligence", variant="primary")
                     gr.Markdown("---")
                     gr.Markdown("### ⚠️ Danger Zone")
