@@ -33,6 +33,33 @@ class ChromaVectorDB:
         else:
             self.registry = {}
 
+
+    def delete_user_account(self, user_id: str, password: str) -> bool:
+        """Permanently nukes user collections and registry entry."""
+        try:
+            self.authenticate(user_id, password)
+            
+            # 1. Delete Collections from Chroma
+            collections_to_wipe = [f"{user_id}_parents", f"{user_id}_children", f"{user_id}_memory"]
+            existing_cols = [c.name for c in self.client.list_collections()]
+            
+            for col in collections_to_wipe:
+                if col in existing_cols:
+                    self.client.delete_collection(name=col)
+                    logger.info(f"Deleted collection: {col}")
+
+            # 2. Remove from Registry
+            if user_id in self.registry:
+                del self.registry[user_id]
+                with open(self.auth_file, "w") as f:
+                    json.dump(self.registry, f)
+            
+            logger.info(f"☢️ User {user_id} and all data have been purged.")
+            return True
+        except Exception as e:
+            logger.error(f"Delete failed: {e}")
+            raise e
+
     def register_user(self, user_id: str, password: str) -> bool:
         if user_id in self.registry:
             logger.error(f"User {user_id} already exists!")

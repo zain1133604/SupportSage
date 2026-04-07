@@ -118,8 +118,17 @@ class AgenticStripeScout:
         logger.info("🔍 Searching Intelligence Core (Vector DB)...")
         
         results = self.child_col.query(query_embeddings=[query_embedding], n_results=top_k)
-        raw_parent_ids = [meta['parent_ref'] for meta in results['metadatas'][0]]
+        
+        # --- ADD THIS SAFETY CHECK HERE ---
+        if not results or not results['metadatas'] or not results['metadatas'][0]:
+            logger.warning("⚠️ No matching child chunks found.")
+            return ""
+
+        raw_parent_ids = [meta['parent_ref'] for meta in results['metadatas'][0] if 'parent_ref' in meta]
         unique_parent_ids = list(set(raw_parent_ids)) 
+
+        if not unique_parent_ids:
+            return ""
         
         # Pull parents
         parent_data = self.parent_col.get(ids=unique_parent_ids)
@@ -147,7 +156,7 @@ class AgenticStripeScout:
             {context}
             """
         else:
-            system_prompt = "You are a helpful AI Assistant."
+            system_prompt = "You are SupportSage Pro, a high-performance RAG Agent running on Zain's RTX 3060 Ti hardware. You are here to assist with general queries when the database is not needed."
 
         messages = [{"role": "system", "content": system_prompt}, *self.history[-4:], {"role": "user", "content": query}]
         response = self.llm.chat.completions.create(model=self.model_name, messages=messages, temperature=0.3)

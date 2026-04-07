@@ -40,6 +40,15 @@ def process_upload(user_id, password, files):
         return f"✅ Database for '{user_id}' ready! Go to the Chat tab."
     except Exception as e:
         return f"❌ Error: {str(e)}"
+    
+def handle_deletion(user_id, password):
+    if not user_id or not password:
+        return "❌ ID and Password required to delete."
+    try:
+        db_manager.delete_user_account(user_id, password)
+        return f"☢️ Database for '{user_id}' has been permanently deleted."
+    except Exception as e:
+        return f"❌ Deletion failed: {str(e)}"
 
 # --- TAB 2: CHAT LOGIC (Updated for Chatbot) ---
 active_agents = {}
@@ -88,6 +97,9 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
                     u_pw = gr.Textbox(label="Password", type="password")
                     file_output = gr.File(label="Upload Documents", file_count="multiple")
                     upload_btn = gr.Button("🚀 Build Vector Intelligence", variant="primary")
+                    gr.Markdown("---")
+                    gr.Markdown("### ⚠️ Danger Zone")
+                    delete_btn = gr.Button("🗑️ Delete My Database", variant="stop")
                 with gr.Column(scale=1):
                     status_output = gr.Textbox(label="System Logs", interactive=False)
 
@@ -131,6 +143,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
     )
     
     clear_btn.click(lambda: None, None, chatbot, queue=False)
+    delete_btn.click(handle_deletion, [u_id, u_pw], status_output)
 
 
 if __name__ == "__main__":
