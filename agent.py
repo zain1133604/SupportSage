@@ -39,21 +39,39 @@ class AgenticStripeScout:
         self.history = []
 
     def determine_strategy(self, query: str) -> str:
-        """AGENTIC ROUTING: Decides the workflow path."""
-        logger.info("🚦 Thinking: Selecting optimized execution path...")
+        """AGENTIC ROUTING: High-Precision Intent Analysis."""
+        logger.info("🚦 Agent Logic: Analyzing Query Intent...")
+        
+        # We give the LLM 'Reasoning' instructions
         router_prompt = f"""
-        Analyze: "{query}"
-        Route to:
-        1. STRIPE_DOCS: Technical Stripe/Payment queries.
-        2. CHAT: Greetings or general conversation.
-        Return ONLY the word: STRIPE_DOCS or CHAT.
+        You are the Gatekeeper for a Secure Knowledge Base. 
+        Your task is to classify the incoming Query: "{query}"
+
+        CLASSIFICATION RULES:
+        - [STRIPE_DOCS]: If the query asks for facts, technical details, people, specific incidents, or data that would be stored in a private company database. 
+        - [CHAT]: Only for pure social interaction (e.g., "How are you?", "Who made you?", "Hello").
+
+        DECISION RUBRIC:
+        - Does the query contain a Proper Noun (e.g., 'Zain')? -> STRIPE_DOCS
+        - Does the query ask 'Did X happen?' or 'Is Y true?' -> STRIPE_DOCS
+        - Is this a technical Stripe integration question? -> STRIPE_DOCS
+
+        Response MUST be exactly one word: STRIPE_DOCS or CHAT.
         """
+        
         response = self.llm.chat.completions.create(
             model=self.model_name,
-            messages=[{"role": "system", "content": router_prompt}],
-            temperature=0.0
+            messages=[
+                {"role": "system", "content": "You are a logical routing module. You only output single labels."},
+                {"role": "user", "content": router_prompt}
+            ],
+            temperature=0.0 # CRITICAL: 0.0 for consistent routing
         )
-        return response.choices[0].message.content.strip()
+        
+        strategy = response.choices[0].message.content.strip().upper()
+        # Clean up any extra words the LLM might add
+        if "STRIPE_DOCS" in strategy: return "STRIPE_DOCS"
+        return "CHAT"
 
     def check_long_term_memory(self, query_embedding: List[float]) -> str:
         """MEMORY RETRIEVAL: Checks if we have learned this before."""
