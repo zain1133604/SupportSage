@@ -17,13 +17,13 @@ db_manager = ChromaVectorDB(persist_dir=DB_PATH)
 # --- TAB 1: INGESTION LOGIC (Keep as is) ---
 def process_upload(user_id, password, files):
     if not user_id or not password or not files:
-        return "❌ Please provide ID, Password, and Files."
+        return "Please provide ID, Password, and Files."
     try:
         if not db_manager.register_user(user_id, password):
             try:
                 db_manager.authenticate(user_id, password)
             except:
-                return "❌ User exists but Password incorrect."
+                return "User exists but Password incorrect."
 
         temp_dir = f"./temp_{user_id}"
         if os.path.exists(temp_dir):
@@ -41,13 +41,13 @@ def process_upload(user_id, password, files):
             # If it's a single directory path
             shutil.copytree(files, temp_dir, dirs_exist_ok=True)
 
-        logger.info(f"📂 Data prepared in {temp_dir}. Starting RAG Pipeline...")
+        logger.info(f"Data prepared in {temp_dir}. Starting RAG Pipeline...")
 
         pipeline = AscendedRAGPipeline(base_path=temp_dir)
         parents, children = pipeline.process()
         
         if not parents:
-            return "⚠️ No valid text/pdf/code files found in the upload."
+            return "No valid text/pdf/code files found in the upload."
 
         # Use global embedder logic if you implemented it, otherwise:
         embedder = EmbeddingEngine(model_name="BAAI/bge-m3", batch_size=4) 
@@ -55,19 +55,19 @@ def process_upload(user_id, password, files):
         db_manager.insert_user_data(user_id, embedded_data)
 
         shutil.rmtree(temp_dir)
-        return f"✅ Database for '{user_id}' ready! Go to the Chat tab."
+        return f"Database for '{user_id}' ready! Go to the Chat tab."
     except Exception as e:
         logger.error(f"Ingestion Error: {str(e)}")
-        return f"❌ Ingestion Error: {str(e)}"
+        return f"Ingestion Error: {str(e)}"
     
 def handle_deletion(user_id, password):
     if not user_id or not password:
-        return "❌ ID and Password required to delete."
+        return "ID and Password required to delete."
     try:
         db_manager.delete_user_account(user_id, password)
-        return f"☢️ Database for '{user_id}' has been permanently deleted."
+        return f"Database for '{user_id}' has been permanently deleted."
     except Exception as e:
-        return f"❌ Deletion failed: {str(e)}"
+        return f" Deletion failed: {str(e)}"
 
 # --- TAB 2: CHAT LOGIC (Updated for Chatbot) ---
 active_agents = {}
@@ -109,25 +109,25 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
 
     with gr.Tabs():
         # --- TAB 1: DATA FORGE ---
-        with gr.TabItem("🏗️ Data Forge"):
+        with gr.TabItem("Data Forge"):
             with gr.Row():
                 with gr.Column(scale=1):
                     u_id = gr.Textbox(label="User ID", placeholder="e.g., zain_ali")
                     u_pw = gr.Textbox(label="Password", type="password")
                     file_output = gr.File(label="Upload Documents", file_count="directory")
-                    upload_btn = gr.Button("🚀 Build Vector Intelligence", variant="primary")
+                    upload_btn = gr.Button("Build Vector Intelligence", variant="primary")
                     gr.Markdown("---")
-                    gr.Markdown("### ⚠️ Danger Zone")
-                    delete_btn = gr.Button("🗑️ Delete My Database", variant="stop")
+                    gr.Markdown("### Danger Zone")
+                    delete_btn = gr.Button("Delete My Database", variant="stop")
                 with gr.Column(scale=1):
                     status_output = gr.Textbox(label="System Logs", interactive=False)
 
         # --- TAB 2: INTELLIGENCE CONSOLE (CHAT MODEL UI) ---
-        with gr.TabItem("🧠 Intelligence Console"):
+        with gr.TabItem("Intelligence Console"):
             with gr.Row():
                 # Side Panel for Auth
                 with gr.Column(scale=1):
-                    gr.Markdown("### 🔐 Session Login")
+                    gr.Markdown("### Session Login")
                     login_id = gr.Textbox(label="User ID")
                     login_pw = gr.Textbox(label="Password", type="password")
                     gr.Markdown("---")

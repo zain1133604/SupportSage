@@ -77,13 +77,13 @@ class AgenticStripeScout:
         """MEMORY RETRIEVAL: Checks if we have learned this before."""
         results = self.memory_col.query(query_embeddings=[query_embedding], n_results=1)
         if results['distances'] and results['distances'][0] and results['distances'][0][0] < 0.15: 
-            logger.info("🧠 Brain: Found a match in Long-Term Memory! Using learned experience.")
+            logger.info("Brain: Found a match in Long-Term Memory! Using learned experience.")
             return results['documents'][0][0]
         return None
 
     def store_in_memory(self, query: str, answer: str, embedding: List[float]):
         """INTELLIGENCE ACCUMULATION: Saves high-quality answers for future use."""
-        logger.info("💾 Learning: Saving this experience to Long-Term Memory...")
+        logger.info("Learning: Saving this experience to Long-Term Memory...")
         self.memory_col.add(
             ids=[str(uuid.uuid4())],
             embeddings=[embedding],
@@ -96,7 +96,7 @@ class AgenticStripeScout:
         if not docs_with_sources:
             return ""
             
-        logger.info(f"🎯 Re-Ranking {len(docs_with_sources)} documents for maximum precision...")
+        logger.info(f"Re-Ranking {len(docs_with_sources)} documents for maximum precision...")
         
         # Re-rank based on the 'text' key
         pairs = [[query, d['text']] for d in docs_with_sources]
@@ -121,7 +121,7 @@ class AgenticStripeScout:
         
         # --- ADD THIS SAFETY CHECK HERE ---
         if not results or not results['metadatas'] or not results['metadatas'][0]:
-            logger.warning("⚠️ No matching child chunks found.")
+            logger.warning("No matching child chunks found.")
             return ""
 
         raw_parent_ids = [meta['parent_ref'] for meta in results['metadatas'][0] if 'parent_ref' in meta]
@@ -164,7 +164,7 @@ class AgenticStripeScout:
 
     def reflect_and_score(self, query: str, context: str, answer: str) -> Tuple[int, str]:
         """RECURSIVE CRITIQUE: Self-correction gate."""
-        logger.info("🧠 Reflection: Verifying technical accuracy...")
+        logger.info("Reflection: Verifying technical accuracy...")
         reflection_prompt = f"Query: {query}\nContext: {context}\nAnswer: {answer}\nRate 1-10. If <10, correct it. FORMAT: SCORE: [num] | FINAL_ANSWER: [text]"
         response = self.llm.chat.completions.create(model=self.model_name, messages=[{"role": "system", "content": reflection_prompt}], temperature=0.1)
         content = response.choices[0].message.content
@@ -191,7 +191,7 @@ class AgenticStripeScout:
         if strategy == "STRIPE_DOCS":
             for i in range(2):
                 score, improved_answer = self.reflect_and_score(user_query, context, current_answer)
-                logger.info(f"📊 Quality Score: {score}/10")
+                logger.info(f"Quality Score: {score}/10")
                 if score >= 9:
                     self.store_in_memory(user_query, improved_answer, query_emb)
                     current_answer = improved_answer
@@ -212,12 +212,12 @@ if __name__ == "__main__":
     try:
         # Initialize agent with security
         agent = AgenticStripeScout(db_path=DB_PATH, user_id=input_id, password=input_pw)
-        print(f"\n✅ Connection established for {input_id}. Workspace loaded.\n")
+        print(f"\nConnection established for {input_id}. Workspace loaded.\n")
         
         while True:
             user_input = input("\n👤 User: ")
             if user_input.lower() in ['exit', 'quit']: break
-            print(f"\n🤖 Agent: {agent.chat(user_input)}")
+            print(f"\nAgent: {agent.chat(user_input)}")
             
     except Exception as e:
-        print(f"\n❌ Access Denied: {str(e)}")
+        print(f"\nAccess Denied: {str(e)}")
