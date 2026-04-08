@@ -96,7 +96,7 @@ class AgenticStripeScout:
         if not docs_with_sources:
             return ""
             
-        logger.info(f"Re-Ranking {len(docs_with_sources)} documents for maximum precision...")
+        logger.info(f"Re-Ranking {len(docs_with_sources)} document for maximum precision...")
         
         # Re-rank based on the 'text' key
         pairs = [[query, d['text']] for d in docs_with_sources]

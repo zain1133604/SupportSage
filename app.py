@@ -17,7 +17,7 @@ db_manager = ChromaVectorDB(persist_dir=DB_PATH)
 # --- TAB 1: INGESTION LOGIC (Keep as is) ---
 def process_upload(user_id, password, files):
     if not user_id or not password or not files:
-        return "Please provide ID, Password, and Files."
+        return "Please provide ID Password and Files."
     try:
         if not db_manager.register_user(user_id, password):
             try:
