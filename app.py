@@ -5,7 +5,7 @@ import shutil
 from database import ChromaVectorDB
 from chunking import AscendedRAGPipeline
 from embedding import EmbeddingEngine
-from agent import AgenticStripeScout
+from agent_traced import TracedAgent
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -78,7 +78,7 @@ def chat_bridge(user_id, password, query, chat_history):
     try:
         if session_key not in active_agents:
             # Note: Ensure your AgenticStripeScout is in agent.py
-            agent = AgenticStripeScout(db_path=DB_PATH, user_id=user_id, password=password)
+            agent = TracedAgent(db_path=DB_PATH, user_id=user_id, password=password)
             active_agents[session_key] = agent
         
         agent = active_agents[session_key]
