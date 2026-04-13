@@ -76,7 +76,7 @@ class AgenticStripeScout:
     def check_long_term_memory(self, query_embedding: List[float]) -> str:
         """MEMORY RETRIEVAL: Checks if we have learned this before."""
         results = self.memory_col.query(query_embeddings=[query_embedding], n_results=1)
-        if results['distances'] and results['distances'][0] and results['distances'][0][0] < 0.15: 
+        if results['distances'] and results['distances'][0] and results['distances'][0][0] < 0.4: 
             logger.info("Brain: Found a match in Long-Term Memory! Using learned experience.")
             return results['documents'][0][0]
         return None
