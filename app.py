@@ -148,12 +148,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
     # --- BINDING ---
     upload_btn.click(process_upload, [u_id, u_pw, file_output], status_output)
     
-    # We pass the chatbot state (history) back and forth
-    send_btn.click(
-        chat_bridge, 
-        inputs=[login_id, login_pw, chat_query, chatbot], 
-        outputs=[chat_query, chatbot, trace_json]
-    )
+
     # Also allow pressing 'Enter' to send
     chat_query.submit(
         chat_bridge, 
