@@ -16,6 +16,7 @@ import time
 # Essential for robust sentence splitting
 try:
     nltk.data.find('tokenizers/punkt')
+    # we need punkt so we can have  highend splitting of sentence.if we don't use it we have to rely on the these signs(.,?). it is not that good as punkt splitting.
 except LookupError:
     nltk.download('punkt')
 
@@ -29,7 +30,7 @@ from langchain_core.documents import Document
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()] # Remove the FileHandler for now
+    handlers=[logging.StreamHandler()] # we are using the streamhandler to show the logs in the console or terminal. we can also use the filehandler. this way our logs will be saved on the .txt or .log files.
 )
 logger = logging.getLogger(__name__)
 
@@ -42,18 +43,18 @@ class AscendedRAGPipeline:
             self.model_name = "BAAI/bge-m3"
             logger.info(f"Loading Local Intelligence: {self.model_name}...")
             
-            # Load once, with trust_remote_code for BGE-M3 specifics
-            self.model = SentenceTransformer(self.model_name, device=self.device, trust_remote_code=True)
+            # Load once, with trust_remote_code for BGE-M3 specifics. here we are loading the model in our memory.
+            self.model = SentenceTransformer(self.model_name, device=self.device, trust_remote_code=True)# the last variable means here that we trust BAAI/bge-m3 creators. this way our python will not show any error.
             
-            self.seen_file_hashes = set()
-            self.seen_chunk_hashes = set() 
-            self.stats = {"files": 0, "parents": 0, "children": 0, "deduped": 0, "filtered": 0}
+            self.seen_file_hashes = set() # we are doing this cause we want every data/file to be unique. we don't want any thing duplicate in our data/file.
+            self.seen_chunk_hashes = set() # In two different files we can have the same data.so we are setting this so even after the chunked if we have the same data coming again from the different file we should be able to filter it. so at the end we don't have duplicate data.
+            self.stats = {"files": 0, "parents": 0, "children": 0, "deduped": 0, "filtered": 0} # Metrics to track processing progress and data quality results
 
     def _is_high_quality(self, text: str) -> bool:
         """The Quality Gate to filter out noise."""
-        t = text.strip()
-        if len(t) < 150: return False
-        if len(set(t)) < 15: return False 
+        t = text.strip() # first we are striping all the grabage out like extra spaces at the end or extra line or signs at the end by using strip() and we get pure data.
+        if len(t) < 150: return False # Reject very short or incomplete text
+        if len(set(t)) < 15: return False # Reject low-diversity text (e.g., repetitive or noisy content)
         return True
 
     def _classify_content(self, text: str) -> str:
