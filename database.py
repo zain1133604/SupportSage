@@ -80,14 +80,26 @@ class ChromaVectorDB:
     # --- YOUR ORIGINAL ROBUST INSERTION LOGIC (Updated for Multi-Tenancy) ---
 
     def _prepare_batch(self, records: List[Dict]):
+    
+        """
+        THE DATA ORGANIZER:
+        This function acts as the 'Bridge' between our raw Python data and ChromaDB.
+        ChromaDB requires data to be delivered in four distinct, synchronized lists
+        rather than a list of dictionaries.
+        """
         ids, embeddings, documents, metadatas = [], [], [], []
         for rec in records:
+            # 1. GENERATE IDENTITY:
+            # We look for an existing ID, then a Parent reference. 
+            # If both are missing, we generate a unique 'License Plate' (UUID) on the fly.
             rec_id = str(rec.get("id") or rec["metadata"].get("parent_ref") or uuid.uuid4().hex)
             ids.append(rec_id)
-            embeddings.append(rec.get("embedding"))
-            documents.append(rec.get("text", ""))
-            metadatas.append(rec.get("metadata", {}))
+            embeddings.append(rec.get("embedding")) # get embeding.
+            documents.append(rec.get("text", "")) # grab the actual human-readable text.
+            metadatas.append(rec.get("metadata", {})) # # We pull the metadata (source, file type, etc.) to keep our search smart.
         return ids, embeddings, documents, metadatas
+
+
 
     def insert_user_data(self, user_id: str, embedded_data: Dict):
         """Modified version of your insert functions to target user collections"""

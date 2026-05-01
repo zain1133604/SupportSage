@@ -89,13 +89,18 @@ def chat_bridge(user_id, password, query, chat_history):
         # 2. Update Chatbot History (Format: [[user, bot], [user, bot]])
         chat_history.append((query, answer))
         
-        # 3. Create a Trace log for the recruiter to see
-        trace = {
+        # 3. Build the Live Logic Trace — now includes Randy's audit evidence:
+        #    source snippets, tool calls, rollback paths, low-confidence flags
+        base_trace = {
             "last_query": query,
             "session_user": user_id,
             "gpu_hardware": "RTX 3060 Ti",
             "agent_memory": f"{len(agent.history)} messages"
         }
+
+        # Pull the full audit trail written by the agent this turn
+        audit_data = getattr(agent, "_last_trace", {})
+        trace = {**base_trace, **audit_data}
         
         return "", chat_history, trace
     

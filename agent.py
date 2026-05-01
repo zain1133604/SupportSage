@@ -42,6 +42,19 @@ class AgenticStripeScout:
         self.llm = Groq(api_key=os.getenv("GROQ_API_KEY"))
         self.model_name = "llama-3.3-70b-versatile"
         self.history = []
+        self.audit_log = []  # Randy's audit trail: every action logged here
+
+    def _log_audit(self, event_type: str, details: Dict[str, Any]):
+        """AUDIT TRAIL: Logs every tool call, source snippet, and permission context.
+        Turns the agent from a clever demo into something an ops team can trust."""
+        import datetime
+        entry = {
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "event_type": event_type,   # e.g. 'SQL_ACTION', 'RAG_RETRIEVAL', 'ROUTING'
+            **details
+        }
+        self.audit_log.append(entry)
+        logger.info(f"[AUDIT] {event_type}: {details}")
 
 
     def safe_json_parse(self, text):
@@ -166,6 +179,13 @@ class AgenticStripeScout:
         try:
             raw = response.choices[0].message.content
             data = self.safe_json_parse(raw)
+            # AUDIT: Log routing decision
+            self._log_audit("ROUTING", {
+                "intent": data.get("intent"),
+                "action_type": data.get("action_type"),
+                "confidence": data.get("confidence"),
+                "entities": data.get("entities")
+            })
             return data
         except:
             return {
@@ -231,6 +251,16 @@ class AgenticStripeScout:
                 if order['status'].lower() in ['shipped', 'delivered']:
                     return f"⚠️ **Update Blocked**: Order {order_id} is already **{order['status']}** and cannot be rerouted at this stage."
 
+                # AUDIT: Log tool call + permission context before executing
+                self._log_audit("SQL_ACTION", {
+                    "action": "change_address",
+                    "order_id": order_id,
+                    "old_address": order.get("address"),
+                    "new_address": new_address,
+                    "order_status_at_time": order.get("status"),
+                    "sql": "UPDATE orders SET address = %s WHERE order_id = %s",
+                    "rollback_path": f"UPDATE orders SET address = '{order.get('address')}' WHERE order_id = '{order_id}'"
+                })
                 cursor.execute("UPDATE orders SET address = %s WHERE order_id = %s", (new_address, order_id))
                 conn.commit()
                 return f"✅ **Address Updated**: The shipping destination for {order_id} has been changed to: {new_address}."
@@ -244,6 +274,14 @@ class AgenticStripeScout:
                 if order['status'].lower() == 'cancelled':
                     return f"ℹ️ Order {order_id} is already marked as 'Cancelled'."
 
+                # AUDIT: Log tool call + rollback path before executing
+                self._log_audit("SQL_ACTION", {
+                    "action": "cancel_order",
+                    "order_id": order_id,
+                    "previous_status": order.get("status"),
+                    "sql": "UPDATE orders SET status = 'Cancelled' WHERE order_id = %s",
+                    "rollback_path": f"UPDATE orders SET status = '{order.get('status')}' WHERE order_id = '{order_id}'"
+                })
                 cursor.execute("UPDATE orders SET status = 'Cancelled' WHERE order_id = %s", (order_id,))
                 conn.commit()
                 return f"🛑 **Order Cancelled**: Order {order_id} has been successfully stopped. You will receive a refund confirmation via email."
@@ -272,7 +310,16 @@ class AgenticStripeScout:
                 if not new_item:
                     return f"✏️ I've accessed order {order_id}. What specific item or product would you like to change it to?"
 
-                # 3. Execution: Update the product_name in the database
+                # AUDIT: Log tool call + rollback path before executing
+                self._log_audit("SQL_ACTION", {
+                    "action": "modify_order",
+                    "order_id": order_id,
+                    "old_product": order.get("product_name"),
+                    "new_product": new_item,
+                    "order_status_at_time": order.get("status"),
+                    "sql": "UPDATE orders SET product_name = %s WHERE order_id = %s",
+                    "rollback_path": f"UPDATE orders SET product_name = '{order.get('product_name')}' WHERE order_id = '{order_id}'"
+                })
                 update_sql = "UPDATE orders SET product_name = %s WHERE order_id = %s"
                 cursor.execute(update_sql, (new_item, order_id))
                 conn.commit()
@@ -386,8 +433,20 @@ class AgenticStripeScout:
         
         # Take top 5 and format with [Source: name]
         formatted_context = []
+        audit_snippets = []
         for score, data in scored_data[:5]:
             formatted_context.append(f"[Source: {data['source']}]\n{data['text']}")
+            audit_snippets.append({
+                "source": data["source"],
+                "rerank_score": round(float(score), 4),
+                "snippet_preview": data["text"][:120] + "..." if len(data["text"]) > 120 else data["text"]
+            })
+
+        # AUDIT: Log retrieved source snippets + their confidence scores
+        self._log_audit("RAG_RETRIEVAL", {
+            "num_sources": len(audit_snippets),
+            "top_sources": audit_snippets
+        })
         
         return "\n---\n".join(formatted_context)
 
@@ -504,6 +563,13 @@ class AgenticStripeScout:
                 logger.info(f"Quality Score: {score}/10")
                 if score >= 9:
                     break
+
+            # AUDIT: Flag low-confidence answers for human review queue
+            self._log_audit("REFLECTION_SCORE", {
+                "reflection_score": score,
+                "needs_human_review": score < 7,
+                "query_preview": user_query[:80]
+            })
 
             if score >= 7:
                 self.store_in_memory(user_query, current_answer, query_emb)

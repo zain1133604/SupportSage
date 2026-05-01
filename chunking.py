@@ -52,20 +52,21 @@ class AscendedRAGPipeline:
 
     def _is_high_quality(self, text: str) -> bool:
         """The Quality Gate to filter out noise."""
-        t = text.strip() # first we are striping all the grabage out like extra spaces at the end or extra line or signs at the end by using strip() and we get pure data.
+        t = text.strip() # first we are striping all the grabage out like extra spaces at the end.
         if len(t) < 150: return False # Reject very short or incomplete text
         if len(set(t)) < 15: return False # Reject low-diversity text (e.g., repetitive or noisy content)
         return True
 
     def _classify_content(self, text: str) -> str:
-        """Regex-based classification for the metadata."""
-        if re.search(r'(def\s+\w+\(|class\s+\w+:|import\s+\w+|{\s*".*":\s*".*")', text):
-            return "technical_code"
-        if text.strip().startswith(('#', '##', '###')):
+        """ -Regex-based classification for the metadata.
+            -Uses Regex patterns to tag text type (Code, Header, List, or Prose) for smarter retrieval metadata."""
+        if re.search(r'(def\s+\w+\(|class\s+\w+:|import\s+\w+|{\s*".*":\s*".*")', text): # checks for code.
+            return "technical_code" 
+        if text.strip().startswith(('#', '##', '###')): # check for headers
             return "structural_header"
-        if re.search(r'(\d+\.\s+|[•\-\*]\s+)', text):
+        if re.search(r'(\d+\.\s+|[•\-\*]\s+)', text): # check for list of lines
             return "list_data"
-        return "narrative_prose"
+        return "narrative_prose" # if not anthing then its a normal data.
 
     def custom_semantic_split(self, text: str) -> List[str]:
             # 1. HARD LIMIT & CLEANUP
@@ -86,9 +87,9 @@ class AscendedRAGPipeline:
                 time.sleep(0.05) # Pulse breathing
                 emb = self.model.encode(
                     [sent], 
-                    batch_size=1, 
+                    batch_size=1, # to avoid power cut.
                     show_progress_bar=False, 
-                    convert_to_numpy=True
+                    convert_to_numpy=True # converting tensors to numpy array to clear the gpu memory.
                 )
                 embeddings.append(emb[0])
                 
@@ -127,20 +128,20 @@ class AscendedRAGPipeline:
             # 4. FINAL RETURN (Crucial to prevent 'NoneType' error)
             return [c for c in chunks if len(c.strip()) > 10]
 
-        # ... (rest of your cosine similarity logic)
+        # ... (rest of our cosine similarity logic)
     def process(self):
         loaders = {
             ".md": TextLoader, 
             ".pdf": PyPDFLoader, 
             ".py": PythonLoader, 
             ".txt": TextLoader,
-            ".csv": TextLoader  # Add this!
+            ".csv": TextLoader  
         }
         final_parents, final_children = [], []
         child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
 
-        for root, _, files in os.walk(self.base_path):
-            company = os.path.basename(root)
+        for root, _, files in os.walk(self.base_path): # walk through every folder and file.
+            company = os.path.basename(root) # saving name of comany.
             for file in tqdm(files, desc=f"Ingesting {company}"):
                 ext = os.path.splitext(file)[1].lower()
                 if ext not in loaders: continue
@@ -148,10 +149,10 @@ class AscendedRAGPipeline:
                 
                 try:
                     with open(path, 'rb') as f:
-                        file_data = f.read()
-                        file_hash = hashlib.md5(file_data).hexdigest()
+                        file_data = f.read() # reading file
+                        file_hash = hashlib.md5(file_data).hexdigest() # putting unique key to each file.
                     
-                    if file_hash in self.seen_file_hashes: 
+                    if file_hash in self.seen_file_hashes: # if duplicate files come skip it.
                         continue
                     self.seen_file_hashes.add(file_hash)
 
@@ -162,33 +163,25 @@ class AscendedRAGPipeline:
                         # We add a header hint so the AI knows what the columns are
                         content = f"CSV Data from {file}:\n" + content
 
+                    # --- CLEANED LOGIC ---
+                    # 1. Create the doc once
                     raw_docs = [Document(page_content=content, metadata={"source": company, "file": file})]
 
                     for doc in raw_docs:
+                        # 2. Run the HEAVY semantic split ONLY ONCE
                         semantic_parents = self.custom_semantic_split(doc.page_content)
                         
                         for group_text in semantic_parents:
-                            # 3. LOOSEN QUALITY GATE FOR CODE AND CSV
-                            # If it's a .py or .csv file, we allow shorter text (50 chars instead of 150)
+                            # 3. Combined Quality Gate
+                            # Check specific length for code/csv
                             min_len = 50 if ext in [".py", ".csv"] else 150
                             
-                            if len(group_text.strip()) < min_len:
-                                self.stats["filtered"] += 1
-                                continue
-                    # 3. MANUAL DOCUMENT CREATION
-                    # This replaces: raw_docs = loaders[ext](path).load()
-                    # We skip the heavy LangChain loaders which are crashing your PC
-                    raw_docs = [Document(page_content=content, metadata={"source": company, "file": file})]
-
-                    for doc in raw_docs:
-                        # This calls your custom_semantic_split which handles the 50k crop
-                        semantic_parents = self.custom_semantic_split(doc.page_content)
-                        
-                        for group_text in semantic_parents:
-                            if not self._is_high_quality(group_text):
+                            # Run both checks: Basic Length AND the "Variety Gate" (_is_high_quality)
+                            if len(group_text.strip()) < min_len or not self._is_high_quality(group_text):
                                 self.stats["filtered"] += 1
                                 continue
                             
+                            # 4. If it passes, create the Parent and Children
                             parent_id = f"p-{uuid.uuid4().hex[:8]}"
                             final_parents.append(Document(
                                 page_content=group_text, 
@@ -201,7 +194,7 @@ class AscendedRAGPipeline:
                                     page_content=c_text, 
                                     metadata={"parent_ref": parent_id, "source": company}
                                 ))
-                    
+                                        
                     self.stats["files"] += 1
 
                     # --- THE SAFETY BRAKES ---
