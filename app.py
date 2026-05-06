@@ -7,6 +7,9 @@ from chunking import AscendedRAGPipeline
 from embedding import EmbeddingEngine
 from agent_traced import TracedAgent
 from compliance_agent import ComplianceAgent
+from audit_db import AuditDatabase
+
+AUDIT_DB_PATH = "./audit_store.db"
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -171,6 +174,162 @@ def run_compliance(user_id, password, framework):
         return f"Error: {str(e)}", {"error": str(e)}
 
 
+# --- TAB 4: AUDIT DASHBOARD LOGIC ---
+
+def audit_get_stats():
+    """Load summary stats when dashboard tab opens."""
+    try:
+        db = AuditDatabase(db_path=AUDIT_DB_PATH)
+        return db.summary_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def audit_search_event(event_id):
+    """Search for a single event by its ID."""
+    if not event_id or not event_id.strip():
+        return "Please enter an Event ID.", {}
+    try:
+        db     = AuditDatabase(db_path=AUDIT_DB_PATH)
+        result = db.get_event(event_id.strip())
+        if not result:
+            return f"No event found for ID: `{event_id}`", {}
+        import json
+        details = json.loads(result.get("details_json", "{}"))
+        display = {
+            "event_id":          result["event_id"],
+            "actor":             result["actor"],
+            "session_id":        result["session_id"],
+            "event_type":        result["event_type"],
+            "timestamp_utc":     result["timestamp_utc"],
+            "source_file":       result["source_file"],
+            "control_ref":       result["control_ref"],
+            "approval_state":    result["approval_state"],
+            "needs_human_review": bool(result["needs_human_review"]),
+            "tool_input_hash":   result["tool_input_hash"],
+            "tool_output_hash":  result["tool_output_hash"],
+            "rollback_sql":      result["rollback_sql"],
+            "details":           details,
+        }
+        return f"✅ Event found: `{event_id}`", display
+    except Exception as e:
+        return f"Error: {str(e)}", {}
+
+
+def audit_search_actor(actor):
+    """Get all events for a user/actor."""
+    if not actor or not actor.strip():
+        return [], "Please enter a User ID."
+    try:
+        db     = AuditDatabase(db_path=AUDIT_DB_PATH)
+        events = db.get_actor_trail(actor.strip(), limit=50)
+        if not events:
+            return [], f"No events found for actor: `{actor}`"
+        rows = [
+            [
+                e["event_id"][:16] + "...",
+                e["event_type"],
+                e["timestamp_utc"][:19],
+                e["control_ref"] or "-",
+                e["approval_state"],
+                "⚠️ Yes" if e["needs_human_review"] else "No",
+                e["source_file"] or "-",
+            ]
+            for e in events
+        ]
+        return rows, f"Found {len(events)} events for actor: `{actor}`"
+    except Exception as e:
+        return [], f"Error: {str(e)}"
+
+
+def audit_search_control(control_ref):
+    """Get all events for a control reference — answers 'why did this control pass'."""
+    if not control_ref or not control_ref.strip():
+        return [], "Please enter a Control Reference (e.g. CMMC.AC.1.001)"
+    try:
+        db     = AuditDatabase(db_path=AUDIT_DB_PATH)
+        events = db.explain_control(control_ref.strip())
+        if not events:
+            return [], f"No events found for control: `{control_ref}`"
+        rows = [
+            [
+                e["event_id"][:16] + "...",
+                e["actor"],
+                e["event_type"],
+                e["timestamp_utc"][:19],
+                e["approval_state"],
+                e["rollback_sql"][:60] + "..." if e["rollback_sql"] else "-",
+            ]
+            for e in events
+        ]
+        return rows, f"Found {len(events)} evidence records for control: `{control_ref}`"
+    except Exception as e:
+        return [], f"Error: {str(e)}"
+
+
+def audit_get_review_queue():
+    """Get all events pending human review."""
+    try:
+        db     = AuditDatabase(db_path=AUDIT_DB_PATH)
+        events = db.get_pending_review_queue()
+        if not events:
+            return [], "✅ Review queue is empty — no pending actions."
+        rows = [
+            [
+                e["event_id"][:16] + "...",
+                e["actor"],
+                e["event_type"],
+                e["timestamp_utc"][:19],
+                e["control_ref"] or "-",
+                e["approval_state"],
+            ]
+            for e in events
+        ]
+        return rows, f"⚠️ {len(events)} items waiting for human review."
+    except Exception as e:
+        return [], f"Error: {str(e)}"
+
+
+def audit_get_sql_actions(actor_filter):
+    """Get all state-changing SQL actions, optionally filtered by actor."""
+    try:
+        db     = AuditDatabase(db_path=AUDIT_DB_PATH)
+        actor  = actor_filter.strip() if actor_filter and actor_filter.strip() else None
+        events = db.get_sql_actions(actor=actor)
+        if not events:
+            msg = f"No SQL actions found" + (f" for actor: `{actor}`" if actor else ".")
+            return [], msg
+        rows = [
+            [
+                e["event_id"][:16] + "...",
+                e["actor"],
+                e["timestamp_utc"][:19],
+                e["source_file"] or "-",
+                e["approval_state"],
+                e["rollback_sql"][:60] + "..." if e["rollback_sql"] else "-",
+            ]
+            for e in events
+        ]
+        msg = f"Found {len(events)} SQL actions" + (f" for actor: `{actor}`" if actor else ".")
+        return rows, msg
+    except Exception as e:
+        return [], f"Error: {str(e)}"
+
+
+def audit_get_rollback(event_id):
+    """Get rollback SQL for a specific event."""
+    if not event_id or not event_id.strip():
+        return "Please enter an Event ID."
+    try:
+        db  = AuditDatabase(db_path=AUDIT_DB_PATH)
+        sql = db.get_rollback_info(event_id.strip())
+        if not sql:
+            return f"No rollback SQL recorded for event: `{event_id}`"
+        return f"**Rollback SQL for `{event_id}`:**\n\n```sql\n{sql}\n```"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # --- UI ---
 with gr.Blocks(
     theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
@@ -247,6 +406,106 @@ All results are saved to `audit_store.db` — queryable without replaying the ag
                 with gr.Column(scale=2):
                     comp_report = gr.Markdown(label="Compliance Report")
 
+        # ── TAB 4: AUDIT DASHBOARD ────────────────────────────────────
+        with gr.TabItem("Audit Dashboard"):
+            gr.Markdown("""
+### Immutable Audit Trail — Query Without Replaying the Agent
+Every action the system takes is saved here permanently.
+Search by Event ID, User, Control Reference, or view the human review queue.
+""")
+            # --- Stats Row ---
+            with gr.Row():
+                stats_json  = gr.JSON(label="Live Audit Stats")
+                refresh_btn = gr.Button("Refresh Stats", variant="secondary")
+
+            gr.Markdown("---")
+
+            with gr.Tabs():
+
+                # Search by Event ID
+                with gr.TabItem("Search by Event ID"):
+                    with gr.Row():
+                        event_id_input  = gr.Textbox(
+                            label="Event ID",
+                            placeholder="Paste any event_id here e.g. 7dafa605f8cb48e2..."
+                        )
+                        event_search_btn = gr.Button("Search", variant="primary")
+                    event_status  = gr.Markdown()
+                    event_result  = gr.JSON(label="Event Record")
+
+                # Search by Actor / User
+                with gr.TabItem("Search by User"):
+                    with gr.Row():
+                        actor_input     = gr.Textbox(
+                            label="User ID (Actor)",
+                            placeholder="e.g. zainali1122"
+                        )
+                        actor_search_btn = gr.Button("Search", variant="primary")
+                    actor_status = gr.Markdown()
+                    actor_table  = gr.Dataframe(
+                        headers=["Event ID", "Type", "Timestamp", "Control Ref", "Approval", "Needs Review", "Source"],
+                        label="User Events (last 50)",
+                        interactive=False,
+                        wrap=True,
+                    )
+
+                # Search by Control Reference
+                with gr.TabItem("Search by Control"):
+                    gr.Markdown("*Answer: 'Show me why this control passed' — without replaying the agent.*")
+                    with gr.Row():
+                        control_input     = gr.Textbox(
+                            label="Control Reference",
+                            placeholder="e.g. CMMC.AC.1.001 or ORDER_WRITE"
+                        )
+                        control_search_btn = gr.Button("Search", variant="primary")
+                    control_status = gr.Markdown()
+                    control_table  = gr.Dataframe(
+                        headers=["Event ID", "Actor", "Type", "Timestamp", "Approval", "Rollback SQL"],
+                        label="Evidence Records",
+                        interactive=False,
+                        wrap=True,
+                    )
+
+                # Human Review Queue
+                with gr.TabItem("Review Queue"):
+                    gr.Markdown("*All actions flagged for human approval — refunds, complaints, low-confidence answers.*")
+                    review_load_btn = gr.Button("Load Review Queue", variant="primary")
+                    review_status   = gr.Markdown()
+                    review_table    = gr.Dataframe(
+                        headers=["Event ID", "Actor", "Type", "Timestamp", "Control Ref", "Approval State"],
+                        label="Pending Human Review",
+                        interactive=False,
+                        wrap=True,
+                    )
+
+                # SQL Actions
+                with gr.TabItem("SQL Actions"):
+                    gr.Markdown("*All state-changing database actions — cancels, address changes, modifies. Filter by user optionally.*")
+                    with gr.Row():
+                        sql_actor_input = gr.Textbox(
+                            label="Filter by User ID (optional)",
+                            placeholder="Leave empty to see all, or enter a user ID"
+                        )
+                        sql_actions_btn = gr.Button("Load SQL Actions", variant="primary")
+                    sql_actions_status = gr.Markdown()
+                    sql_actions_table  = gr.Dataframe(
+                        headers=["Event ID", "Actor", "Timestamp", "Table", "Approval", "Rollback SQL"],
+                        label="SQL Action Log",
+                        interactive=False,
+                        wrap=True,
+                    )
+
+                # Rollback SQL Lookup
+                with gr.TabItem("Rollback SQL"):
+                    gr.Markdown("*Get the exact SQL to undo any state-changing action.*")
+                    with gr.Row():
+                        rollback_input = gr.Textbox(
+                            label="Event ID",
+                            placeholder="Paste event_id of the action you want to undo"
+                        )
+                        rollback_btn = gr.Button("Get Rollback SQL", variant="primary")
+                    rollback_output = gr.Markdown()
+
     # ── BINDINGS ───────────────────────────────────────────────────────
     upload_btn.click(process_upload, [u_id, u_pw, file_output], status_output)
     delete_btn.click(handle_deletion, [u_id, u_pw], status_output)
@@ -267,6 +526,45 @@ All results are saved to `audit_store.db` — queryable without replaying the ag
         run_compliance,
         inputs  = [comp_user_id, comp_password, framework_drop],
         outputs = [comp_report, comp_summary]
+    )
+
+    # Audit Dashboard bindings
+    refresh_btn.click(audit_get_stats, inputs=[], outputs=[stats_json])
+
+    event_search_btn.click(
+        audit_search_event,
+        inputs  = [event_id_input],
+        outputs = [event_status, event_result]
+    )
+
+    actor_search_btn.click(
+        audit_search_actor,
+        inputs  = [actor_input],
+        outputs = [actor_table, actor_status]
+    )
+
+    control_search_btn.click(
+        audit_search_control,
+        inputs  = [control_input],
+        outputs = [control_table, control_status]
+    )
+
+    review_load_btn.click(
+        audit_get_review_queue,
+        inputs  = [],
+        outputs = [review_table, review_status]
+    )
+
+    rollback_btn.click(
+        audit_get_rollback,
+        inputs  = [rollback_input],
+        outputs = [rollback_output]
+    )
+
+    sql_actions_btn.click(
+        audit_get_sql_actions,
+        inputs  = [sql_actor_input],
+        outputs = [sql_actions_table, sql_actions_status]
     )
 
 
