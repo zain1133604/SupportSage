@@ -9,6 +9,8 @@
 ![LangSmith](https://img.shields.io/badge/LangSmith-Traced-yellow?style=flat-square)
 ![MySQL](https://img.shields.io/badge/MySQL-Order%20DB-00758f?style=flat-square)
 ![CUDA](https://img.shields.io/badge/CUDA-RTX%203060%20Ti-76b900?style=flat-square)
+![SQLite](https://img.shields.io/badge/SQLite-Audit%20Store-003b57?style=flat-square)
+![CMMC](https://img.shields.io/badge/CMMC-Compliance-red?style=flat-square)
 
 ---
 
@@ -18,7 +20,7 @@ SupportSage Pro is a production-grade, multi-tenant Agentic RAG system built for
 
 Any organization or individual can upload their private documentation and instantly deploy a fully isolated, intelligent support agent over that data. The agent can also process live order actions (cancel, track, refund, modify), escalate complaints via email, and accumulate knowledge over time through long-term memory.
 
-Every user gets their own secured vector database. Every answer is grounded in source-cited documents. Every response passes through an agentic reflection loop. Every agent call is traced and observable via LangSmith.
+Every user gets their own secured vector database. Every answer is grounded in source-cited documents. Every response passes through an agentic reflection loop. Every agent call is traced and observable via LangSmith. **Every action is persisted to an immutable audit store — survives restarts and queryable by auditors without replaying the agent.**
 
 **This is not a tutorial project. This is a deployable system.**
 
@@ -34,6 +36,10 @@ Every user gets their own secured vector database. Every answer is grounded in s
 | RAG systems can't take real actions | Live MySQL integration handles order cancellations, refunds, address changes, modifications |
 | Complaints fall through the cracks | Automated SMTP escalation emails routed to support team on complaint detection |
 | No production visibility | Full LangSmith tracing on every agent call — reasoning, latency, chain execution |
+| Audit trails only live in memory | Persistent SQLite audit store — every event written on commit, survives restarts |
+| No way to undo agent actions | Every state-changing action stores exact rollback SQL — retrievable anytime without touching the agent |
+| AI maps wrong evidence to compliance controls | Compliance agent maps uploaded docs to CMMC, NIST, SOC 2 with source provenance and confidence scores |
+| Human has no control over AI decisions | Real human-in-the-loop approval — PENDING actions wait for human Approve/Reject before executing |
 
 ---
 
@@ -92,14 +98,41 @@ Every user gets their own secured vector database. Every answer is grounded in s
          │   8. Response Generation                    │  ← LLaMA-3.3-70B via Groq
          │   9. Reflection Loop                        │  ← Score/correct up to 2x
          │  10. Memory Storage                         │  ← Save high-quality answers
+         │  11. Audit Logging (_log_audit)             │  ← Every action → audit_db.py
+         └─────────────────────┬──────────────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │     audit_db.py     │
+                    │                     │
+                    │  Immutable SQLite   │  ← Every event INSERT only — never deleted
+                    │  Audit Store        │  ← actor, timestamp, SHA-256 hashes
+                    │                     │  ← control_ref, approval_state
+                    │  log_event()        │  ← rollback_sql, needs_human_review
+                    │  update_approval()  │  ← PENDING → APPROVED / REJECTED
+                    │  explain_control()  │  ← "show me why AC.1.001 passed"
+                    │  get_rollback_info()│  ← exact SQL to undo any action
+                    └──────────┬──────────┘
+                               │
+         ┌─────────────────────▼──────────────────────┐
+         │           compliance_agent.py               │
+         │                                             │
+         │   _search_evidence()                        │  ← BGE-M3 search per control
+         │   _evaluate_control()                       │  ← LLM: SATISFIED/PARTIAL/GAP
+         │   run_compliance_check()                    │  ← Full framework loop
+         │   summarise()                               │  ← Score calculation
+         │                                             │
+         │   Frameworks: CMMC / NIST / SOC 2          │  ← 20 controls each
          └─────────────────────┬──────────────────────┘
                                │
                       ┌────────▼────────┐
                       │    app.py       │
                       │  Gradio UI      │
-                      │  Data Forge Tab │  ← Upload + build knowledge base
-                      │  Chat Tab +     │  ← Full agentic chat interface
+                      │  Data Forge     │  ← Upload + build knowledge base
+                      │  Chat Tab       │  ← Full agentic chat interface
                       │  Live Trace     │  ← Real-time session metadata panel
+                      │  Compliance Tab │  ← Run CMMC / NIST / SOC 2 checks
+                      │  Audit Trail    │  ← Query persistent audit store
+                      │  Review Queue   │  ← Human approve / reject panel
                       └─────────────────┘
 ```
 
@@ -115,6 +148,47 @@ Order action queries trigger a live MySQL pipeline. The agent handles the full l
 
 ### Automated Complaint Escalation
 When the intent router detects a `COMPLAINT`, the system immediately logs the event and sends an SMTP escalation email to the support team containing the user query and all extracted entities. The user receives an empathetic confirmation. No complaint is silently dropped.
+
+### Persistent Immutable Audit Store
+Every action the agent takes is written as an immutable record to a SQLite database (`audit_store.db`) that survives server restarts. Each record captures:
+
+| Field | Purpose |
+|---|---|
+| `actor` | Who triggered the action (user_id) |
+| `timestamp_utc` | Exact UTC time of the event |
+| `tool_input_hash` | SHA-256 fingerprint of what went in |
+| `tool_output_hash` | SHA-256 fingerprint of what came out |
+| `control_ref` | Compliance control this event maps to |
+| `approval_state` | AUTO / PENDING / APPROVED / REJECTED |
+| `rollback_sql` | Exact SQL to undo any state change |
+| `needs_human_review` | Flagged for human review queue |
+
+An auditor can call `explain_control("CMMC.AC.1.001")` and get the full evidence trail directly from the database — without replaying the agent at all.
+
+### Rollback Path
+Every state-changing order action (cancel, address change, modify) generates and stores the exact rollback SQL before executing. If a decision needs to be undone, an ops team calls `get_rollback_info(event_id)` to retrieve the SQL and run it manually — no agent involvement required. The rollback SQL is stored permanently in the audit record and is visible in the Audit Trail tab of the UI.
+
+### Human-in-the-Loop Approval
+Refund requests and low-confidence answers are never executed automatically. They are written as `PENDING` events in the audit store with `needs_human_review=True`. A reviewer opens the **Review Queue** tab, loads all pending actions, copies the Event ID, enters their name, and clicks **Approve** or **Reject**.
+
+Two things happen on every human decision:
+1. The original record's `approval_state` is updated from `PENDING` to `APPROVED` or `REJECTED` — the original content is never deleted
+2. A brand new `HUMAN_DECISION` event is written to the audit store recording the reviewer's name, their decision, and exactly which event they reviewed — permanently and queryably
+
+### Compliance Agent (CMMC / NIST / SOC 2)
+Upload your organization's policy documents and run a full compliance check against any supported framework. For each control the agent:
+
+1. Encodes the control description with BGE-M3 and searches the user's vector DB for relevant evidence
+2. Sends the evidence to Groq LLM with a structured prompt requesting: status (SATISFIED / PARTIAL / GAP), confidence score, exact evidence quote, and source document name
+3. Persists the full result to the audit store with `control_ref` so it is queryable later
+
+**Supported frameworks:**
+
+| Framework | Controls |
+|---|---|
+| CMMC | 20 controls (AC, IA, AU, CM, IR, RM, SC, SI, MP, PE) |
+| NIST SP 800-171 | 20 controls (3.1 through 3.14) |
+| SOC 2 | 20 controls (CC1 through A1) |
 
 ### LangSmith Observability
 Agent calls are wrapped with a custom `@traceable` decorator via `trace_wrapper.py`. Every query creates a named LangSmith span (`SupportSage-Agent-Call`) capturing the full execution trace — reasoning steps, chain latency, and intermediate outputs. The `langsmith_config.py` module configures tracing at startup, connecting to the `SupportSage-Pro` project automatically.
@@ -150,17 +224,20 @@ Verified high-quality answers are stored as embeddings in the user's `_memory` c
 ```
 supportsage-pro/
 │
-├── langsmith_config.py   # LangSmith tracing setup (project + API key)
-├── trace_wrapper.py      # @traceable decorator for agent observability
-├── agent_traced.py       # TracedAgent wrapper — connects tracing to agent
-├── chunking.py           # Semantic parent-child document processing
-├── embedding.py          # Local BGE-M3 embedding engine (CUDA, pulse-mode)
-├── database.py           # ChromaDB multi-tenant manager + SHA-256 auth
-├── agent.py              # Full agentic pipeline (routing → retrieval → reflection)
-├── app.py                # Gradio web UI + live trace panel
+├── langsmith_config.py      # LangSmith tracing setup (project + API key)
+├── trace_wrapper.py         # @traceable decorator for agent observability
+├── agent_traced.py          # TracedAgent wrapper — connects tracing to agent
+├── chunking.py              # Semantic parent-child document processing
+├── embedding.py             # Local BGE-M3 embedding engine (CUDA, pulse-mode)
+├── database.py              # ChromaDB multi-tenant manager + SHA-256 auth
+├── agent.py                 # Full agentic pipeline (routing → retrieval → reflection)
+├── audit_db.py              # Persistent immutable SQLite audit store
+├── compliance_agent.py      # Evidence-to-control mapping (CMMC / NIST / SOC 2)
+├── compliance_framework.py  # Control definitions for all 3 frameworks
+├── app.py                   # Gradio web UI + audit trail + compliance + review queue
 │
-├── requirements.txt      # All dependencies
-├── .env                  # GROQ_API_KEY + LANGCHAIN_API_KEY (never committed)
+├── requirements.txt         # All dependencies
+├── .env                     # GROQ_API_KEY + LANGCHAIN_API_KEY (never committed)
 └── README.md
 ```
 
@@ -175,6 +252,7 @@ supportsage-pro/
 | LLM | LLaMA-3.3-70B via Groq | High-quality reasoning at low latency |
 | Re-Ranker | ms-marco-MiniLM-L-6-v2 | Fast cross-encoder for precision post-retrieval scoring |
 | Order Database | MySQL | Live order lifecycle management with parameterized SQL |
+| Audit Store | SQLite (audit_db.py) | Immutable persistent event log — survives restarts |
 | Complaint Routing | SMTP (Gmail) | Automated escalation emails to support team |
 | Observability | LangSmith | Full agent tracing, latency monitoring, chain visibility |
 | Sentence Splitting | NLTK punkt tokenizer | Reliable sentence boundaries before semantic grouping |
@@ -241,13 +319,48 @@ The Gradio interface launches at `http://localhost:7860`. Use `share=True` in `a
 4. The agent routes your intent, retrieves, re-ranks, generates, reflects, and cites
 5. Watch the **Live Logic Trace** panel update in real time
 
-### Step 3 — Monitor in LangSmith
+### Step 3 — Run a Compliance Check
+1. Open the **Compliance** tab
+2. Enter your User ID and password
+3. Select a framework: CMMC, NIST, or SOC 2
+4. Click **Run Compliance Check**
+5. The agent maps your uploaded documents to every control and returns a full report with status, confidence score, evidence quote, and source document per control
+
+### Step 4 — Review the Audit Trail
+1. Open the **Audit Trail** tab
+2. Search by Event ID, actor, or compliance control reference
+3. Every event is queryable without replaying the agent
+4. Call `explain_control("CMMC.AC.1.001")` to see exactly why a control passed
+
+### Step 5 — Approve or Reject Pending Actions
+1. Open the **Review Queue** tab
+2. Click **Load Review Queue** to see all pending actions
+3. Copy the full Event ID from the table
+4. Enter your reviewer name
+5. Click **Approve** or **Reject**
+6. The original record is never deleted — your decision is written as a permanent `HUMAN_DECISION` event in the audit store
+
+### Step 6 — Monitor in LangSmith
 1. Open [smith.langchain.com](https://smith.langchain.com) → **SupportSage-Pro** project
 2. Every agent call appears as: `SupportSage-Agent-Call`
 3. Inspect reasoning paths, chain latency, and intermediate outputs per query
 
-### Step 4 — Delete Your Data
+### Step 7 — Delete Your Data
 Use the **Delete My Database** button in the Data Forge tab. Requires your ID and password. Irreversible.
+
+---
+
+## Audit Event Types
+
+| Event Type | When It Is Written |
+|---|---|
+| `ROUTING` | Every query the agent receives |
+| `RAG_RETRIEVAL` | Every knowledge base search |
+| `SQL_ACTION` | Every order change (cancel, address, modify) |
+| `REFLECTION_SCORE` | Every answer quality check |
+| `COMPLAINT` | Every complaint detected |
+| `COMPLIANCE_CHECK` | Every compliance control evaluated |
+| `HUMAN_DECISION` | Every human approval or rejection |
 
 ---
 
@@ -270,7 +383,7 @@ Use the **Delete My Database** button in the Data Forge tab. Requires your ID an
 | `track_order` | Returns current status for any order |
 | `cancel_order` | Blocked if status is `Shipped` or `Delivered` |
 | `change_address` | Blocked if status is `Shipped` or `Delivered` |
-| `refund_request` | Auto-processed for `Cancelled` orders; opened for review otherwise |
+| `refund_request` | Written as PENDING — waits for human approval before any money moves |
 | `modify_order` | Only allowed for `Pending` or `In Cart` status |
 | `view_order_details` | Returns product, status, and shipping address |
 | `payment_issue` | Redirects to secure portal — card info never accepted in chat |
@@ -296,6 +409,8 @@ Use the **Delete My Database** button in the Data Forge tab. Requires your ID an
 - Long-term memory lookups happen before all other processing and add near-zero latency (single vector query)
 - LangSmith tracing adds negligible overhead — spans are submitted asynchronously and do not block the response path
 - MySQL order actions are connection-pooled with a 5-second timeout and always released in `finally` blocks
+- Audit store writes are committed immediately on every event — no batching to preserve immutability
+- Compliance checks loop through 20 controls per framework — each control makes one embedding query and one LLM call
 - For large document sets (500+ pages), initial ingestion may take several minutes depending on GPU speed
 
 ---
@@ -304,7 +419,7 @@ Use the **Delete My Database** button in the Data Forge tab. Requires your ID an
 
 Most RAG demonstrations are single-tenant, use cloud embeddings, stop at basic retrieval, and have zero production observability. SupportSage Pro answers a harder question: **what does a support system look like when it needs to actually work?**
 
-The answer involved multi-tenancy with real auth, fully local embedding for data privacy, a re-ranking stage for precision, source citations for trust, a reflection loop for accuracy, live database integration for real actions, automated complaint escalation, and LangSmith tracing so you can see exactly what the agent is doing on every single call.
+The answer involved multi-tenancy with real auth, fully local embedding for data privacy, a re-ranking stage for precision, source citations for trust, a reflection loop for accuracy, live database integration for real actions, automated complaint escalation, LangSmith tracing so you can see exactly what the agent is doing on every single call, a persistent immutable audit store so every decision survives restarts and is queryable by auditors, rollback SQL so any action can be undone without touching the agent, human-in-the-loop approval so no money moves automatically, and a compliance agent that maps your documents to CMMC, NIST, and SOC 2 controls with full source provenance.
 
 Each of these decisions exists because a real support system fails without them.
 
@@ -312,7 +427,7 @@ Each of these decisions exists because a real support system fails without them.
 
 ## Author
 
-Built by **Zain** — running on an RTX 3060 Ti, refusing to use cloud embeddings, tracing every agent call, and actually connecting to the database.
+Built by **Zain** — running on an RTX 3060 Ti, refusing to use cloud embeddings, tracing every agent call, actually connecting to the database, and persisting every decision to an audit store that answers "show me why this control passed" without replaying the agent.
 
 ---
 
